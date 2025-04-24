@@ -1,9 +1,9 @@
 name: nightly-status
 
 on:
-  workflow_dispatch:          # manual Run workflow button
+  workflow_dispatch:          # manual “Run workflow” button
   schedule:
-    - cron: "0 09 * * *"      # 09:00 UTC = 04:00 CT daily
+    - cron: "0 09 * * *"      # 09:00 UTC = 04:00 CT every day
 
 jobs:
   gather:
@@ -33,8 +33,8 @@ jobs:
                 --format=json > status/dataflow.json
           gcloud ai custom-jobs list   --region=us-central1 \
                 --format=json > status/ai.json
-          gcloud monitoring metrics read \
-                'compute.googleapis.com/instance/cpu/utilization' \
+          gcloud monitoring time-series list \
+                --filter='metric.type="compute.googleapis.com/instance/cpu/utilization"' \
                 --limit=1 --format=json > status/metrics.json
 
           jq -n '{
