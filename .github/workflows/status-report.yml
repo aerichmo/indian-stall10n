@@ -2,7 +2,7 @@ name: nightly-status
 on:
   workflow_dispatch:        # manual run button
   schedule:
-    - cron: "0 09 * * *"    # 09:00 UTC (04:00 CT) daily
+    - cron: "0 09 * * *"    # 09:00 UTC = 04:00 CT daily
 
 jobs:
   gather:
