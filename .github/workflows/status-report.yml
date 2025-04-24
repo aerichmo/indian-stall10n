@@ -1,37 +1,14 @@
-name: nightly-status
-
-on:
-  workflow_dispatch:          # manual Run workflow button
-  schedule:
-    - cron: "0 09 * * *"      # 09:00 UTC = 04:00 CT every day
-
-jobs:
-  gather:
-    permissions: {id-token: write, contents: write}
-    runs-on: ubuntu-latest
-
-    steps:
-      # 1 · Check out repo files
-      - uses: actions/checkout@v4
-
-      # 2 · Authenticate to Google Cloud via Workload Identity Federation
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: cicd-gh-actions@indianstall10n.iam.gserviceaccount.com
-
-      # 3 · Collect live status from GCP services
       - name: Collect live status
         run: |
           gcloud config set project indianstall10n
           mkdir -p status
 
-          gcloud functions list      --format=json > status/functions.json
-          gcloud run services list   --format=json > status/run.json
-          gcloud dataflow jobs list  --region=us-central1 \
+          gcloud functions list        --format=json > status/functions.json
+          gcloud run services list     --format=json > status/run.json
+          gcloud dataflow jobs list    --region=us-central1 \
                 --format=json > status/dataflow.json
-          gcloud ai custom-jobs list --format=json > status/ai.json
+          gcloud ai custom-jobs list   --region=us-central1 \
+                --format=json > status/ai.json
           gcloud monitoring metrics read \
                 'compute.googleapis.com/instance/cpu/utilization' \
                 --limit=1 --format=json > status/metrics.json
@@ -45,11 +22,3 @@ jobs:
             metrics:    input
           }' status/functions.json status/run.json status/dataflow.json \
              status/ai.json status/metrics.json > status.json
-
-      # 4 · Publish status.json to the gh-pages branch
-      - name: Publish to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./status
-          destination_dir: .
