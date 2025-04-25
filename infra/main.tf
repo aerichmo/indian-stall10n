@@ -1,4 +1,9 @@
 terraform {
+  backend "gcs" {
+    bucket = "indianstall10n-terraform-state"  # <<< exact bucket name
+    prefix = "infra"
+  }
+
   required_version = ">= 1.3"
   required_providers {
     google = {
