@@ -1,0 +1,53 @@
+name: nightly-status   # publishes status.json + txt + html to GitHub Pages
+
+################################################################################
+#  Triggers
+################################################################################
+on:
+  workflow_dispatch:         # manual Run workflow button
+  schedule:                  # 03:00 UTC daily  ➜  10 p.m. CT / 11 p.m. ET
+    - cron:  '0 3 * * *'
+
+################################################################################
+#  Single job – fetch live status & push to gh-pages
+################################################################################
+jobs:
+  publish-status:
+    runs-on: ubuntu-latest
+
+    # allow this job’s GITHUB_TOKEN to push
+    permissions:
+      contents: write
+
+    steps:
+    # 1️⃣  Pull the published branch directly (makes commit path correct)
+    - name: Checkout gh-pages
+      uses: actions/checkout@v4
+      with:
+        ref: gh-pages
+        fetch-depth: 0         # ensure branch history is available
+
+    # 2️⃣  Download the latest JSON snapshot from your Cloud Run endpoint
+    #     Replace the URL or command with whatever actually produces status.json
+    - name: Fetch live status JSON
+      env:
+        STATUS_ENDPOINT: ${{ secrets.STATUS_ENDPOINT }}   # put full https URL in repo Secrets
+      run: |
+        curl -fsSL "$STATUS_ENDPOINT" -o status.json
+
+    # 3️⃣  Generate additional formats (text, HTML)
+    - name: Create status.txt & status.html
+      run: |
+        cp status.json status.txt
+        printf '<!DOCTYPE html>\n<html><body><pre>\n%s\n</pre></body></html>\n' \
+               "$(cat status.json)" > status.html
+
+    # 4️⃣  Commit & push (only if there’s an actual diff)
+    - name: Commit snapshot to gh-pages
+      run: |
+        git config user.email "github-actions@users.noreply.github.com"
+        git config user.name  "github-actions"
+        git add status.json status.txt status.html
+        git commit -m "auto: publish status snapshot $(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+          || echo "Nothing new to commit"
+        git push origin gh-pages
