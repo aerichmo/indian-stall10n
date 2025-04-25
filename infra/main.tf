@@ -13,14 +13,30 @@ provider "google" {
   region  = var.region
 }
 
-locals {
-  tracks = ["oaklawn", "remington", "fairmeadows"]
+# ──────────────────────────────────────────────────────────────
+#  Bucket to store Cloud Function source code (ingest.zip)
+# ──────────────────────────────────────────────────────────────
+resource "google_storage_bucket" "source" {
+  name          = "indianstall10n-cf-source"   # must be globally unique
+  location      = var.region
+  force_destroy = true
 }
 
+locals {
+  tracks      = ["oaklawn", "remington", "fairmeadows"]
+  code_bucket = google_storage_bucket.source.name
+}
+
+# ──────────────────────────────────────────────────────────────
+#  Pub/Sub topics
+# ──────────────────────────────────────────────────────────────
 resource "google_pubsub_topic" "race_raw"     { name = "race_raw" }
 resource "google_pubsub_topic" "results_raw"  { name = "results_raw" }
 resource "google_pubsub_topic" "start_ingest" { name = "start_ingest" }
 
+# ──────────────────────────────────────────────────────────────
+#  Ingest Cloud Functions (one per track)
+# ──────────────────────────────────────────────────────────────
 resource "google_cloudfunctions2_function" "ingest" {
   for_each = toset(local.tracks)
 
@@ -32,8 +48,8 @@ resource "google_cloudfunctions2_function" "ingest" {
     entry_point = "main"
     source {
       storage_source {
-        bucket = google_storage_bucket.source.code_bucket
-        object = "ingest.zip"
+        bucket = local.code_bucket        # ← fixed bucket reference
+        object = "ingest.zip"             # upload later
       }
     }
   }
@@ -56,9 +72,12 @@ resource "google_cloudfunctions2_function" "ingest" {
   }
 }
 
+# ──────────────────────────────────────────────────────────────
+#  Cloud Scheduler job to start ingest each morning (10 a.m. CT)
+# ──────────────────────────────────────────────────────────────
 resource "google_cloud_scheduler_job" "ignite" {
   name      = "start-ingest"
-  schedule  = var.cron           # 10 a.m. CT
+  schedule  = var.cron
   time_zone = "America/Chicago"
 
   pubsub_target {
