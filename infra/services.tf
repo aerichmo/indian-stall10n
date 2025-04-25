@@ -1,21 +1,26 @@
 # infra/services.tf
-# Enable all GCP APIs the pipeline needs
+# Enable every Google Cloud API the pipeline relies on.
+# Terraform will enable any missing service and keep state
+# so future runs stay green.
 
 locals {
   apis = [
-    "cloudbuild.googleapis.com",      # builds Cloud Functions containers
-    "cloudscheduler.googleapis.com",  # daily start‐ingest job
-    "eventarc.googleapis.com",
-    "run.googleapis.com",             # Cloud Run (future)
-    "dataflow.googleapis.com",        # streaming ETL (future)
-    "aiplatform.googleapis.com",      # Vertex AI (future)
-    "pubsub.googleapis.com",          # already implicitly on, but safe
-    "cloudfunctions.googleapis.com"   # CFv2 itself
+    # Core build + deploy
+    "cloudbuild.googleapis.com",
+    "cloudfunctions.googleapis.com",
+    "eventarc.googleapis.com",        # Pub/Sub triggers for CFv2
+    "cloudscheduler.googleapis.com",
+
+    # Streaming + prediction pipeline (future-proof)
+    "pubsub.googleapis.com",
+    "dataflow.googleapis.com",
+    "run.googleapis.com",
+    "aiplatform.googleapis.com"
   ]
 }
 
 resource "google_project_service" "required" {
   for_each                   = toset(local.apis)
-  service                    = each.key
+  service                    = each.value
   disable_dependent_services = false
 }
