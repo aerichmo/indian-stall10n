@@ -5,6 +5,7 @@ locals {
   apis = [
     "cloudbuild.googleapis.com",      # builds Cloud Functions containers
     "cloudscheduler.googleapis.com",  # daily start‐ingest job
+    "eventarc.googleapis.com",
     "run.googleapis.com",             # Cloud Run (future)
     "dataflow.googleapis.com",        # streaming ETL (future)
     "aiplatform.googleapis.com",      # Vertex AI (future)
