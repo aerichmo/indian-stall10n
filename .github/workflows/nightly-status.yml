@@ -1,56 +1,61 @@
 name: nightly-status
+
 on:
+  workflow_dispatch:          # run manually from the Actions tab
   schedule:
-    - cron: '*/30 * * * *'   # every 30 min UTC
-  workflow_dispatch:
+    - cron: '*/30 * * * *'    # every 30 min UTC   ⟶ adjust if you like
+  push:
+    branches: [main]
 
 jobs:
-  publish:
+  build-and-publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: infra   # <-- where your Terraform / scripts live
 
     steps:
-    - uses: actions/checkout@v4
+    # 1. Checkout the repo
+    - name: Checkout
+      uses: actions/checkout@v4
       with:
-        ref: gh-pages
         fetch-depth: 1
 
-    # ---------- GCP auth ----------
-    - name: Auth to GCP
-      uses: google-github-actions/auth@v1
-      with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
-
+    # 2. (Optional) set up Google Cloud CLI if you query live resources
     - name: Set up gcloud CLI
-      uses: google-github-actions/setup-gcloud@v2
+      uses: google-github-actions/setup-gcloud@v1
       with:
         project_id: indianstall10n
+        service_account_key: ${{ secrets.GCP_SA_KEY_JSON }}   # <-- already in repo secrets
+        export_default_credentials: true
 
-    # ---------- Build snapshot ----------
-    - name: Build status snapshot
+    # 3. Pull the latest status & render HTML/JSON
+    - name: Generate status snapshot
       run: |
         set -euo pipefail
-        NOW=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-        gcloud functions list --format=json > functions.json
-        gcloud run services list --format=json > run.json
-        jq -n --arg now "$NOW" \
-           --slurpfile f functions.json \
-           --slurpfile r run.json \
-           '{generated:$now, functions:$f[0], run:$r[0], dataflow:[], ai:[]}' \
-           > status.json
-        cp status.json status.html
+        mkdir -p site
+        # Get Functions list
+        gcloud functions list --format=json > site/functions.json
+        # Optional: add Dataflow, Vertex AI, etc.
+        jq -n --argfile f site/functions.json \
+             '{generated: (now|todateiso8601), functions: $f, run: [], dataflow: [], ai: []}' \
+             > site/status.json
+        # Very small HTML wrapper
+        cat > site/index.html <<'EOF'
+        <!doctype html><html><head><meta charset=utf-8><title>Status</title></head>
+        <body><h1>indian-stall10n status</h1><pre id=pre></pre>
+        <script>fetch('status.json').then(r=>r.json()).then(j=>{document.getElementById('pre').textContent=JSON.stringify(j,null,2)});</script>
+        </body></html>
+        EOF
+        # keep backward-compat file name
+        cp site/index.html site/status.html
 
-    # ---------- Commit & push ----------
-    - name: Commit snapshot
-      run: |
-        git config user.name  "github-actions"
-        git config user.email "github-actions@users.noreply.github.com"
-        git add status.json status.html
-        git commit -m "auto: publish status snapshot $NOW" || echo "No changes"
-
-    - name: Push to gh-pages
+    # 4. Publish ./site to gh-pages
+    - name: Publish to gh-pages
       uses: ad-m/github-push-action@v0.6.0
       with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}   # ←-- FIX: pass token
         branch: gh-pages
         force: true
+        directory: site
