@@ -1,53 +1,57 @@
-name: nightly-status   # publishes status.json + txt + html to GitHub Pages
-
-################################################################################
-#  Triggers
-################################################################################
+name: nightly-status
 on:
-  workflow_dispatch:         # manual Run workflow button
-  schedule:                  # 03:00 UTC daily  ➜  10 p.m. CT / 11 p.m. ET
-    - cron:  '0 3 * * *'
+  schedule:
+    # every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
 
-################################################################################
-#  Single job – fetch live status & push to gh-pages
-################################################################################
 jobs:
-  publish-status:
+  publish:
     runs-on: ubuntu-latest
 
-    # allow this job’s GITHUB_TOKEN to push
-    permissions:
-      contents: write
-
     steps:
-    # 1️⃣  Pull the published branch directly (makes commit path correct)
-    - name: Checkout gh-pages
-      uses: actions/checkout@v4
-      with:
-        ref: gh-pages
-        fetch-depth: 0         # ensure branch history is available
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          # we update status.json in gh-pages, not main
+          ref: gh-pages
+          # full history not needed, keep it shallow
+          fetch-depth: 1
 
-    # 2️⃣  Download the latest JSON snapshot from your Cloud Run endpoint
-    #     Replace the URL or command with whatever actually produces status.json
-    - name: Fetch live status JSON
-      env:
-        STATUS_ENDPOINT: ${{ secrets.STATUS_ENDPOINT }}   # put full https URL in repo Secrets
-      run: |
-        curl -fsSL "$STATUS_ENDPOINT" -o status.json
+      # ---- Google Cloud auth ----
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: indianstall10n
+          export_default_credentials: true
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
 
-    # 3️⃣  Generate additional formats (text, HTML)
-    - name: Create status.txt & status.html
-      run: |
-        cp status.json status.txt
-        printf '<!DOCTYPE html>\n<html><body><pre>\n%s\n</pre></body></html>\n' \
-               "$(cat status.json)" > status.html
+      # ---- Build the status payload ----
+      - name: Build status snapshot
+        run: |
+          set -euo pipefail
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          gcloud functions list  --format=json > functions.json
+          gcloud run services list --format=json > run.json
+          jq -n --arg now "$NOW" \
+             --slurpfile f functions.json \
+             --slurpfile r run.json \
+             '{generated:$now, functions:$f[0], run:$r[0], dataflow:[], ai:[]}' \
+             > status.json
+          # simple HTML wrapper for browser view
+          cp status.json status.html
+          echo "Snapshot built at $NOW"
 
-    # 4️⃣  Commit & push (only if there’s an actual diff)
-    - name: Commit snapshot to gh-pages
-      run: |
-        git config user.email "github-actions@users.noreply.github.com"
-        git config user.name  "github-actions"
-        git add status.json status.txt status.html
-        git commit -m "auto: publish status snapshot $(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-          || echo "Nothing new to commit"
-        git push origin gh-pages
+      # ---- Commit & push ----
+      - name: Commit changes
+        run: |
+          git config user.name  "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add status.json status.html
+          git commit -m "auto: publish status snapshot $(jq -r .generated status.json)" || echo "No changes to commit"
+
+      - name: Push to gh-pages
+        uses: ad-m/github-push-action@v0.6.0
+        with:
+          branch: gh-pages
+          force: true   # gh-pages is write-only for these snapshots
