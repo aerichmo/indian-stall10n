@@ -1,57 +1,56 @@
 name: nightly-status
 on:
   schedule:
-    # every 30 minutes
-    - cron: '*/30 * * * *'
+    - cron: '*/30 * * * *'   # every 30 min UTC
   workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout gh-pages
-        uses: actions/checkout@v4
-        with:
-          # we update status.json in gh-pages, not main
-          ref: gh-pages
-          # full history not needed, keep it shallow
-          fetch-depth: 1
+    - uses: actions/checkout@v4
+      with:
+        ref: gh-pages
+        fetch-depth: 1
 
-      # ---- Google Cloud auth ----
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: indianstall10n
-          export_default_credentials: true
-          service_account_key: ${{ secrets.GCP_SA_KEY }}
+    # ---------- GCP auth ----------
+    - name: Auth to GCP
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # ---- Build the status payload ----
-      - name: Build status snapshot
-        run: |
-          set -euo pipefail
-          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          gcloud functions list  --format=json > functions.json
-          gcloud run services list --format=json > run.json
-          jq -n --arg now "$NOW" \
-             --slurpfile f functions.json \
-             --slurpfile r run.json \
-             '{generated:$now, functions:$f[0], run:$r[0], dataflow:[], ai:[]}' \
-             > status.json
-          # simple HTML wrapper for browser view
-          cp status.json status.html
-          echo "Snapshot built at $NOW"
+    - name: Set up gcloud CLI
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: indianstall10n
 
-      # ---- Commit & push ----
-      - name: Commit changes
-        run: |
-          git config user.name  "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-          git add status.json status.html
-          git commit -m "auto: publish status snapshot $(jq -r .generated status.json)" || echo "No changes to commit"
+    # ---------- Build snapshot ----------
+    - name: Build status snapshot
+      run: |
+        set -euo pipefail
+        NOW=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        gcloud functions list --format=json > functions.json
+        gcloud run services list --format=json > run.json
+        jq -n --arg now "$NOW" \
+           --slurpfile f functions.json \
+           --slurpfile r run.json \
+           '{generated:$now, functions:$f[0], run:$r[0], dataflow:[], ai:[]}' \
+           > status.json
+        cp status.json status.html
 
-      - name: Push to gh-pages
-        uses: ad-m/github-push-action@v0.6.0
-        with:
-          branch: gh-pages
-          force: true   # gh-pages is write-only for these snapshots
+    # ---------- Commit & push ----------
+    - name: Commit snapshot
+      run: |
+        git config user.name  "github-actions"
+        git config user.email "github-actions@users.noreply.github.com"
+        git add status.json status.html
+        git commit -m "auto: publish status snapshot $NOW" || echo "No changes"
+
+    - name: Push to gh-pages
+      uses: ad-m/github-push-action@v0.6.0
+      with:
+        branch: gh-pages
+        force: true
