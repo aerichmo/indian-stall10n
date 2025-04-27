@@ -1,45 +1,38 @@
-name: n1ghtly-status         # note the “1” to avoid name clash
-on:
-  schedule:
-    # ┌────────┬────────┬────────┬────────┬────────┐
-    # │ minute │  hour  │  dom   │ month  │ dow    │
-    # └────────┴────────┴────────┴────────┴────────┘
-    # 05:00 UTC and 17:00 UTC  →   ~mid-morning & evening US-Central
-    - cron:  "0 5,17 * * *"
+# File: .github/workflows/n1ghtly-status.yml
+# Purpose: write a fresh status.json to the gh-pages branch twice a day
+# ──────────────────────────────────────────────────────────────────────
+name: n1ghtly-status
 
-  workflow_dispatch:          # allow you to run it manually
-concurrency:                  # never let two runs overlap
-  group: n1ghtly-status
-  cancel-in-progress: false
+on:
+  schedule:               # UTC — adjust if you prefer other times
+    - cron:  '13 03 * * *'   # 03 :13  UTC
+    - cron:  '13 15 * * *'   # 15 :13  UTC
+  workflow_dispatch:      # manual trigger button in the Actions tab
+
+permissions:              # enable the default GITHUB_TOKEN to push
+  contents: write
 
 jobs:
-  ingest-and-publish:
+  snapshot:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 📥  Check out repository
-      uses: actions/checkout@v4
+      # ── 1. Check out your repo (required for push-action) ──────────
+      - uses: actions/checkout@v4
 
-    - name: 🐍  Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
+      # ── 2. Build / refresh the status file ─────────────────────────
+      - name: Generate status.json
+        shell: bash
+        run: |
+          iso_ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "{ \"generated\": \"${iso_ts}\" }" > status.json
 
-    - name: 🔄  Install deps
-      run: |
-        python -m pip install --quiet requests
-
-    - name: 🚚  Pull racing feeds and build status.json
-      env:
-        API_USER: ${{ secrets.RACING_API_USER }}
-        API_PASS: ${{ secrets.RACING_API_PASS }}
-      run: |
-        python scripts/ingest.py                      # <- you will add this file
-        echo "Updated raw feeds and status.json"
-
-    - name: 🚀  Push to gh-pages
-      uses: ad-m/github-push-action@v0.6.0
-      with:
-        github_token: ${{ secrets.GH_PAGES_PUBLISHER_KEY }}
-        branch: gh-pages
-        # Commit all changed files (raw/*.json, status.json)
+      # ── 3. Commit & push to the gh-pages branch ────────────────────
+      - name: Push snapshot to gh-pages
+        uses: ad-m/github-push-action@v0.6.0
+        with:
+          github_token: ${{ github.token }}   # default token, now write-enabled
+          branch: gh-pages
+          force: true                         # overwrite previous snapshot
+          message: "auto: publish status snapshot ${{ github.run_id }}"
+          files: status.json
