@@ -1,75 +1,45 @@
-name: n1ghtly-status
-# ─────────────────────────────────────────────────────────────
-# Nightly snapshot of Cloud Functions & Cloud Run services.
-# Publishes status.json to the gh-pages branch so
-# https://aerichmo.github.io/indian-stall10n/status.json is always fresh.
-# ─────────────────────────────────────────────────────────────
+name: n1ghtly-status         # note the “1” to avoid name clash
 on:
   schedule:
-    # 01:00 UTC every day  ➜  20:00 ET (previous day) / 17:00 PT
-    - cron:  '0 1 * * *'
-  workflow_dispatch:      # allow manual “Run workflow”
+    # ┌────────┬────────┬────────┬────────┬────────┐
+    # │ minute │  hour  │  dom   │ month  │ dow    │
+    # └────────┴────────┴────────┴────────┴────────┘
+    # 05:00 UTC and 17:00 UTC  →   ~mid-morning & evening US-Central
+    - cron:  "0 5,17 * * *"
+
+  workflow_dispatch:          # allow you to run it manually
+concurrency:                  # never let two runs overlap
+  group: n1ghtly-status
+  cancel-in-progress: false
 
 jobs:
-  snapshot:
+  ingest-and-publish:
     runs-on: ubuntu-latest
 
-    env:
-      GCLOUD_PROJECT: indianstall10n         # <-- your GCP project ID
-      TZ: UTC                                # timestamps in UTC
-
     steps:
-    # 1 ——————————————————  Check out repo
-    - name: Checkout
+    - name: 📥  Check out repository
       uses: actions/checkout@v4
 
-    # 2 ——————————————————  Authenticate to Google Cloud
-    #    Uses the service-account JSON stored in the repo secret GCP_SA_KEY.
-    - name: Auth
-      id: auth
-      uses: google-github-actions/auth@v1
+    - name: 🐍  Set up Python
+      uses: actions/setup-python@v5
       with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
+        python-version: "3.11"
 
-    # 3 ——————————————————  Install the gcloud CLI
-    - name: Set up gcloud
-      uses: google-github-actions/setup-gcloud@v1
-      with:
-        project_id: ${{ env.GCLOUD_PROJECT }}
-        install_components: 'beta'
-
-    # 4 ——————————————————  Pull live resources
-    - name: Pull Cloud Functions list
+    - name: 🔄  Install deps
       run: |
-        gcloud functions list --format=json > functions.json
+        python -m pip install --quiet requests
 
-    - name: Pull Cloud Run services list
+    - name: 🚚  Pull racing feeds and build status.json
+      env:
+        API_USER: ${{ secrets.RACING_API_USER }}
+        API_PASS: ${{ secrets.RACING_API_PASS }}
       run: |
-        gcloud run services list --platform=managed --format=json > run.json
+        python scripts/ingest.py                      # <- you will add this file
+        echo "Updated raw feeds and status.json"
 
-    # (Optional) add other resources – dataflow, vertex, etc.
-    # gcloud dataflow jobs list … > dataflow.json
-
-    # 5 ——————————————————  Build consolidated status.json
-    - name: Build status.json
-      id: build_status
-      run: |
-        jq -n \
-          --slurpfile fn functions.json \
-          --slurpfile rn run.json \
-          --arg generated "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-          '{generated:$generated, functions:$fn[0], run:$rn[0], dataflow:[], ai:[]}' \
-          > status.json
-        cat status.json
-
-    # 6 ——————————————————  Commit & push to gh-pages
-    - name: Publish to gh-pages
+    - name: 🚀  Push to gh-pages
       uses: ad-m/github-push-action@v0.6.0
       with:
+        github_token: ${{ secrets.GH_PAGES_PUBLISHER_KEY }}
         branch: gh-pages
-        force: true
-        message: "auto: publish status snapshot ${{ steps.build_status.outputs.generated }}"
-        github_token: ${{ secrets.GH_PAGES_PUBLISHER_KEY }}   # PAT with “public_repo” scope
-        # ─ The following block stages only the status.json file ─
-        add: |
-          status.json
+        # Commit all changed files (raw/*.json, status.json)
