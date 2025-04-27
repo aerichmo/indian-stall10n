@@ -1,50 +1,67 @@
-name: Nightly status
+# .github/workflows/n1ghtly-status.yml
+name: n1ghtly-status
 
+################################################################################
+# Triggers ────────────── run twice a day UTC-time + manual button
+################################################################################
 on:
   schedule:
-    # 07:00 and 19:00 UTC
-    - cron:  '0 7,19 * * *'
+    # 06:15 UTC  and  18:15 UTC  (≈ midnight / noon US-Central)
+    - cron:  '15 6 * * *'
+    - cron:  '15 18 * * *'
   workflow_dispatch:
 
+################################################################################
+# Default token gets CONTENTS-write so no PAT is required
+################################################################################
+permissions:
+  contents: write          # push to gh-pages
+  id-token: write          # (unused now, but handy if we add OIDC later)
+
+################################################################################
+# Job ───────────────────────────────────────────────────────────────────────────
+################################################################################
 jobs:
-  update-status:
+  build-and-publish:
     runs-on: ubuntu-latest
 
     steps:
-      # 1  Checkout repo (no submodules; full history not needed)
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0    # allow us to create commits on gh-pages
+    # 1) Checkout repo (full history so that force-push can replace it)
+    - name: Checkout main
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      # 2  Fetch the latest status JSON from the Cloud Functions endpoint
-      - name: Download functions.json
-        run: |
-          curl -fsSL https://us-central1-indianstall10n.cloudfunctions.net/status-snapshot \
-          -o functions.json
+    # 2) ───────────── Generate / refresh status data
+    #    Replace this stub with real logic whenever you’re ready.
+    - name: Generate status.json
+      run: |
+        mkdir -p public                     # final output folder
+        cat > public/status.json <<'EOF'
+        {
+          "generated": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+          "functions": [],
+          "run": [],
+          "dataflow": [],
+          "ai": [],
+          "note":  "placeholder file ­— add real status logic here"
+        }
+        EOF
 
-      # 3  Copy / transform as needed (optional)
-      - name: Copy to docs
-        run: |
-          mkdir -p docs
-          cp functions.json docs/functions.json
+    # 3) Commit the artefact back to *main* (optional but useful for history)
+    - name: Commit artefact to main
+      run: |
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --global user.name  "github-actions[bot]"
+        git add public/status.json
+        git commit -m "chore: nightly status $(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+          || echo "Nothing new to commit"
 
-      # 4  Commit the change
-      - name: Commit changes
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/functions.json
-          if git diff --cached --quiet; then
-            echo "No changes – skipping commit."
-          else
-            git commit -m "chore: nightly status snapshot $(date -u +'%Y-%m-%d %H:%M:%SZ')"
-          fi
-
-      # 5  Push straight to gh-pages (force overwrite)
-      - name: Push to gh-pages
-        uses: ad-m/github-push-action@v0.6.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: gh-pages
-          force: true        # <-- solves the non-fast-forward error
+    # 4) ─────────────  Publish /public → gh-pages (force overwrite)
+    - name: Push to gh-pages
+      uses: ad-m/github-push-action@v0.6.0
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}   # no PAT needed
+        branch: gh-pages
+        directory: public
+        force: true                                 # ALWAYS overwrite
