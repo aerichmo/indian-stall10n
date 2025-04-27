@@ -1,38 +1,39 @@
 # File: .github/workflows/n1ghtly-status.yml
-# Purpose: write a fresh status.json to the gh-pages branch twice a day
-# ──────────────────────────────────────────────────────────────────────
+# Purpose: write / update status.json on gh-pages twice a day
+# ─────────────────────────────────────────────────────────────────
 name: n1ghtly-status
 
 on:
-  schedule:               # UTC — adjust if you prefer other times
-    - cron:  '13 03 * * *'   # 03 :13  UTC
-    - cron:  '13 15 * * *'   # 15 :13  UTC
-  workflow_dispatch:      # manual trigger button in the Actions tab
+  schedule:
+    - cron:  '13 03 * * *'   # 03:13  UTC  (≈ late evening U.S.)
+    - cron:  '13 15 * * *'   # 15:13  UTC  (≈ morning U.S.)
+  workflow_dispatch:
 
-permissions:              # enable the default GITHUB_TOKEN to push
-  contents: write
+permissions:
+  contents: write            # enables default GITHUB_TOKEN to push
 
 jobs:
   snapshot:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Check out your repo (required for push-action) ──────────
+      # 1 ▸ Checkout *gh-pages* with full history so we’re up-to-date
       - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 0
 
-      # ── 2. Build / refresh the status file ─────────────────────────
+      # 2 ▸ Create / overwrite status.json
       - name: Generate status.json
         shell: bash
         run: |
-          iso_ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          echo "{ \"generated\": \"${iso_ts}\" }" > status.json
+          ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "{ \"generated\": \"${ts}\" }" > status.json
 
-      # ── 3. Commit & push to the gh-pages branch ────────────────────
-      - name: Push snapshot to gh-pages
-        uses: ad-m/github-push-action@v0.6.0
+      # 3 ▸ Commit & push (fast-forward or new commit on top)
+      - name: Commit & push to gh-pages
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          github_token: ${{ github.token }}   # default token, now write-enabled
+          commit_message: "auto: publish status snapshot ${{ github.run_id }}"
           branch: gh-pages
-          force: true                         # overwrite previous snapshot
-          message: "auto: publish status snapshot ${{ github.run_id }}"
-          files: status.json
+          file_pattern: status.json
