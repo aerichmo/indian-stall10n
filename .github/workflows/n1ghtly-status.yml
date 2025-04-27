@@ -1,58 +1,90 @@
-name: n1ghtly-status   # nightly snapshot published to the gh-pages branch
+# .github/workflows/n1ghtly-status.yml
+name: n1ghtly-status
+
+# ────────────────
+# 1. When to run
+# ────────────────
 on:
-  workflow_dispatch:   # run by hand
-  schedule:            # …and automatically every night at 00:30 UTC
-    - cron: '30 0 * * *'
+  schedule:          # UTC → 04:00 = 11 pm CDT / 09 pm PDT (adjust cron if needed)
+    - cron:  '0 4 * * *'
+  workflow_dispatch: # manual trigger button in the UI
+
+# ────────────────
+# 2. Global defaults
+# ────────────────
+defaults:
+  run:
+    shell: bash
+    working-directory: ${{ github.workspace }}
+
+env:
+  GCLOUD_PROJECT: indianstall10n
+  TZ: UTC
 
 jobs:
   snapshot:
     runs-on: ubuntu-latest
 
-    env:
-      GCLOUD_PROJECT: indianstall10n        # <-- hard-code or expose as a secret
-      TZ: UTC                               # make sure timestamps are UTC
-
     steps:
-    # 1. check out the repo
+    # ---- 2.1 check out repo (required for gh-pages publishing) ----
     - uses: actions/checkout@v4
 
-    # 2. authenticate to Google Cloud with your **service-account JSON key**
-    - name: Set up gcloud
-      uses: google-github-actions/setup-gcloud@v1
+    # ---- 2.2 auth to Google Cloud with the service-account JSON key ----
+    - id: auth
+      uses: google-github-actions/auth@v1
       with:
-        project_id:   ${{ env.GCLOUD_PROJECT }}
-        service_account_key: ${{ secrets.GCP_SA_KEY }}
-        export_default_credentials: true
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    # 3. pull the latest list of Cloud Functions for the project
-    - name: Pull Cloud Functions list
+    # ---- 2.3 install the gcloud CLI ----
+    - uses: google-github-actions/setup-gcloud@v1
+      with:
+        project_id: ${{ env.GCLOUD_PROJECT }}
+
+    # ---- 2.4 pull resource inventories ----
+    - name: List Cloud Functions → functions.json
       run: |
         gcloud functions list --format=json > functions.json
 
-    # 4. wrap that list in a top-level object with a timestamp
-    - name: Build status.json
+    - name: List Cloud Run services → run.json
       run: |
-        TS=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        gcloud run services list --format=json > run.json
+
+    # add any other inventories you need.  If you don’t use them, keep empty arrays
+    - name: Placeholder Dataflow, AI lists
+      run: |
+        echo '[]' > dataflow.json
+        echo '[]' > ai.json
+
+    # ---- 2.5 compose master status.json ----
+    - name: Build status bundle
+      run: |
         jq -n \
-          --arg generated "$TS" \
-          --slurpfile functions functions.json \
-          '{generated:$generated, functions:$functions[0]}' \
-          > status.json
+          --arg gen "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+          --slurpfile f functions.json \
+          --slurpfile r run.json \
+          --slurpfile d dataflow.json \
+          --slurpfile a ai.json \
+          '{generated:$gen,functions:$f[0],run:$r[0],dataflow:$d[0],ai:$a[0]}' \
+        > status.json
 
-    # 5. commit & push **only** the status.json file to the gh-pages branch
-    #    using your dedicated deploy key (GH_PAGES_PUBLISHER_KEY)
-    - name: Add SSH key
-      uses: webfactory/ssh-agent@v0.8.0
-      with:
-        ssh-private-key: ${{ secrets.GH_PAGES_PUBLISHER_KEY }}
-
-    - name: Commit and push
+    # ---- 2.6 stage artefacts in a throw-away git repo ----
+    - name: Stage artefacts
       run: |
-        git config --global user.name  "gh-pages-publisher"
-        git config --global user.email "actions@users.noreply.github.com"
-        git fetch origin gh-pages       || git checkout --orphan gh-pages
-        git switch gh-pages             || git checkout gh-pages
-        mv status.json status.json      # overwrite / add at repo root
-        git add status.json
-        git commit -m "auto: publish status snapshot $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "Nothing new to commit"
-        git push origin gh-pages
+        mkdir output
+        mv status.json functions.json run.json dataflow.json ai.json output/
+        cd output
+        git init
+        git config user.name  "github-actions"
+        git config user.email "actions@github.com"
+        git add .
+        git commit -m "auto: publish status snapshot $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+    # ---- 2.7 publish output/ directory to gh-pages branch ----
+    - name: Publish to gh-pages
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        deploy_key:  ${{ secrets.GH_PAGES_PUBLISHER_KEY }}
+        publish_dir: output
+        publish_branch: gh-pages
+        commit_message: "status snapshot – ${{ github.run_id }}"
+
