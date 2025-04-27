@@ -1,61 +1,93 @@
 name: nightly-status
 
+# ────────────────────────────────────────────────────────────────────────────────
+#  This job:
+#    1. Activates a GCP service-account key stored in the GCP_SA_KEY secret.
+#    2. Lists every 2nd-gen Cloud Function in the project and saves it to JSON.
+#    3. Pushes a pretty-printed snapshot to the gh-pages branch
+#       (so https://<user>.github.io/<repo>/status.html is always up-to-date).
+#    4. Runs automatically every 30 min and can be launched manually.
+# ────────────────────────────────────────────────────────────────────────────────
+
 on:
-  workflow_dispatch:          # run manually from the Actions tab
   schedule:
-    - cron: '*/30 * * * *'    # every 30 min UTC   ⟶ adjust if you like
-  push:
-    branches: [main]
+    - cron: '*/30 * * * *'    # every 30 minutes
+  workflow_dispatch:          # allows “Run workflow” button in Actions tab
 
 jobs:
-  build-and-publish:
+  snapshot:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-        working-directory: infra   # <-- where your Terraform / scripts live
 
     steps:
-    # 1. Checkout the repo
-    - name: Checkout
+    # ──────────────────────────────────────────────────────────
+    # Step 0 : Checkout repo (needed for gh-pages push)
+    # ──────────────────────────────────────────────────────────
+    - name: 🛎️  Checkout repository
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
 
-    # 2. (Optional) set up Google Cloud CLI if you query live resources
-    - name: Set up gcloud CLI
-      uses: google-github-actions/setup-gcloud@v1
-      with:
-        project_id: indianstall10n
-        service_account_key: ${{ secrets.GCP_SA_KEY_JSON }}   # <-- already in repo secrets
-        export_default_credentials: true
-
-    # 3. Pull the latest status & render HTML/JSON
-    - name: Generate status snapshot
+    # ──────────────────────────────────────────────────────────
+    # Step 1 : Authenticate to Google Cloud
+    # ──────────────────────────────────────────────────────────
+    - name: 🗝️  Activate service-account key
+      id: gcp-auth
       run: |
         set -euo pipefail
-        mkdir -p site
-        # Get Functions list
-        gcloud functions list --format=json > site/functions.json
-        # Optional: add Dataflow, Vertex AI, etc.
-        jq -n --argfile f site/functions.json \
-             '{generated: (now|todateiso8601), functions: $f, run: [], dataflow: [], ai: []}' \
-             > site/status.json
-        # Very small HTML wrapper
-        cat > site/index.html <<'EOF'
-        <!doctype html><html><head><meta charset=utf-8><title>Status</title></head>
-        <body><h1>indian-stall10n status</h1><pre id=pre></pre>
-        <script>fetch('status.json').then(r=>r.json()).then(j=>{document.getElementById('pre').textContent=JSON.stringify(j,null,2)});</script>
-        </body></html>
-        EOF
-        # keep backward-compat file name
-        cp site/index.html site/status.html
 
-    # 4. Publish ./site to gh-pages
-    - name: Publish to gh-pages
-      uses: ad-m/github-push-action@v0.6.0
+        # Write the JSON key from the secret to a temp file
+        echo '${{ secrets.GCP_SA_KEY }}' > "$RUNNER_TEMP/sa.json"
+
+        # Activate that key for the rest of the job
+        gcloud auth activate-service-account \
+          --key-file="$RUNNER_TEMP/sa.json" \
+          --quiet
+
+        # Make sure every later gcloud/gsutil call uses it
+        echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+        # Sanity-check – prints active account e-mail (safe to show)
+        gcloud config list account
+
+    # ──────────────────────────────────────────────────────────
+    # Step 2 : Pull live Cloud Functions status
+    # ──────────────────────────────────────────────────────────
+    - name: 📡  Fetch Cloud Functions snapshot
+      run: |
+        set -euo pipefail
+        gcloud functions list --format=json > functions.json
+        gcloud run services list --format=json > run.json || echo '[]' > run.json
+        gcloud dataflow jobs list --format=json > dataflow.json || echo '[]' > dataflow.json
+
+        jq -n \
+          --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          --slurpfile f functions.json \
+          --slurpfile r run.json \
+          --slurpfile d dataflow.json \
+          '{generated:$generated, functions:$f[0], run:$r[0], dataflow:$d[0], ai:[]}' \
+          > status.json
+
+    # ──────────────────────────────────────────────────────────
+    # Step 3 : Render pretty HTML (simple <pre> wrapper)
+    # ──────────────────────────────────────────────────────────
+    - name: 🖨️  Build status.html
+      run: |
+        set -euo pipefail
+        {
+          echo '<!doctype html><meta charset="utf-8">'
+          echo '<title>indian-stall10n • status</title>'
+          echo '<h1>System status snapshot</h1>'
+          echo '<pre>'
+          jq . status.json
+          echo '</pre>'
+        } > status.html
+
+    # ──────────────────────────────────────────────────────────
+    # Step 4 : Publish to the gh-pages branch
+    # ──────────────────────────────────────────────────────────
+    - name: 🚀  Push to gh-pages
+      uses: peaceiris/actions-gh-pages@v4
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}   # ←-- FIX: pass token
-        branch: gh-pages
-        force: true
-        directory: site
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_branch: gh-pages
+        publish_dir: .
+        commit_message: |
+          auto: publish status snapshot ${{ steps.gcp-auth.outputs.date || env.GITHUB_SHA }}
