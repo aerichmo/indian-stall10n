@@ -1,67 +1,48 @@
-# .github/workflows/n1ghtly-status.yml
-name: n1ghtly-status
-
-################################################################################
-# Triggers ────────────── run twice a day UTC-time + manual button
-################################################################################
+name: status-publisher
 on:
   schedule:
-    # 06:15 UTC  and  18:15 UTC  (≈ midnight / noon US-Central)
-    - cron:  '15 6 * * *'
-    - cron:  '15 18 * * *'
+    # Runs at 02:15 UTC and 14:15 UTC daily (~9:15 AM / 9:15 PM CDT)
+    - cron: "15 2,14 * * *"
   workflow_dispatch:
 
-################################################################################
-# Default token gets CONTENTS-write so no PAT is required
-################################################################################
-permissions:
-  contents: write          # push to gh-pages
-  id-token: write          # (unused now, but handy if we add OIDC later)
-
-################################################################################
-# Job ───────────────────────────────────────────────────────────────────────────
-################################################################################
 jobs:
-  build-and-publish:
+  build-status:
     runs-on: ubuntu-latest
-
+    permissions:          # scopes for the default GITHUB_TOKEN
+      contents: write     # allow committing to gh-pages
     steps:
-    # 1) Checkout repo (full history so that force-push can replace it)
-    - name: Checkout main
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    # 2) ───────────── Generate / refresh status data
-    #    Replace this stub with real logic whenever you’re ready.
-    - name: Generate status.json
-      run: |
-        mkdir -p public                     # final output folder
-        cat > public/status.json <<'EOF'
-        {
-          "generated": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
-          "functions": [],
-          "run": [],
-          "dataflow": [],
-          "ai": [],
-          "note":  "placeholder file ­— add real status logic here"
-        }
-        EOF
+      # ---- Authenticate to GCP ----
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: ">= 465.0.0"
 
-    # 3) Commit the artefact back to *main* (optional but useful for history)
-    - name: Commit artefact to main
-      run: |
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git config --global user.name  "github-actions[bot]"
-        git add public/status.json
-        git commit -m "chore: nightly status $(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-          || echo "Nothing new to commit"
+      - name: Auth with workload identity key
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"
 
-    # 4) ─────────────  Publish /public → gh-pages (force overwrite)
-    - name: Push to gh-pages
-      uses: ad-m/github-push-action@v0.6.0
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}   # no PAT needed
-        branch: gh-pages
-        directory: public
-        force: true                                 # ALWAYS overwrite
+      - name: Set default project
+        run: gcloud config set project YOUR_PROJECT_ID   # <-- change
+
+      # ---- Pull live data ----
+      - name: Capture Cloud Functions list
+        run: gcloud functions list --format=json > status/functions.json
+
+      - name: Capture Pub/Sub topics list
+        run: gcloud pubsub topics list --format=json > status/topics.json
+
+      # (Optional) add any other gcloud queries you want:
+      # gcloud logging read ... > status/logs.json
+
+      # ---- Commit to gh-pages ----
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./status          # folder created above
+          publish_branch: gh-pages
+          force_orphan: true             # keeps gh-pages separate
